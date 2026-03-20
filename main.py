@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime
 from astrbot.api.all import *
 
-@register("dnf_personal_reminder", "yunko1993", "DNF私人提醒秘书", "1.3.1")
+@register("dnf_personal_reminder", "yunko1993", "DNF私人提醒秘书", "1.3.2")
 class PersonalReminder(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -68,17 +68,23 @@ class PersonalReminder(Star):
     async def _send_private_notification(self, item):
         msg = f"🔔 【私人秘书提醒】\n--------------------\n内容：{item['content']}\n时间：{item['time']}\n--------------------\n别忘了去领取哦！"
         try:
-            await self.context.send_private_message(item['user_id'], [Plain(msg)])
+            await self.context.send_private_message(str(item['user_id']), [Plain(msg)])
         except Exception as e:
             logging.error(f"发送提醒失败: {e}")
 
-    # ================= 指令区 =================
+    # ================= 修复核心：更改参数接收逻辑 =================
     
     @command("提醒添加")
-    async def add(self, event: AstrMessageEvent, time_str: str, *args: str):
+    async def add(self, event: AstrMessageEvent, time_str: str, *args, **kwargs):
         '''用法: /提醒添加 10:30 领心悦增幅器'''
-        # 修复 _empty() 报错：给 *args 加上了 : str 类型注解
-        content = " ".join(args)
+        # 针对 v4.16.0 修复：
+        # 框架可能把内容放在 positional args 里，也可能放在 keyword args 'args' 里
+        content_list = list(args)
+        if not content_list and 'args' in kwargs:
+            content_list = kwargs['args']
+            
+        content = " ".join(content_list)
+        
         if not content:
             yield CommandResult().error("内容不能为空！格式: /提醒添加 10:30 领东西")
             return
@@ -89,11 +95,7 @@ class PersonalReminder(Star):
             yield CommandResult().error("时间格式错误！请使用 HH:MM (如 09:30)")
             return
 
-        # 修复 user_id 报错：使用更稳健的 API 获取方式
-        try:
-            user_id = str(event.get_sender_id())
-        except:
-            user_id = str(event.message_obj.sender.user_id)
+        user_id = str(event.get_sender_id())
         
         self.reminders.append({
             "user_id": user_id,
@@ -105,13 +107,9 @@ class PersonalReminder(Star):
         yield CommandResult().success(f"✅ 设置成功！每天 {time_str} 我会私聊提醒你。")
 
     @command("提醒列表")
-    async def list_reminders(self, event: AstrMessageEvent):
-        '''用法: /提醒列表 （查看我的提醒列表）'''
-        try:
-            user_id = str(event.get_sender_id())
-        except:
-            user_id = str(event.message_obj.sender.user_id)
-            
+    async def list_reminders(self, event: AstrMessageEvent, **kwargs):
+        '''用法: /提醒列表'''
+        user_id = str(event.get_sender_id())
         my_items =[f"[{i}] {r['time']} - {r['content']}" for i, r in enumerate(self.reminders) if str(r['user_id']) == user_id]
         
         if not my_items:
@@ -120,13 +118,9 @@ class PersonalReminder(Star):
             yield CommandResult().success("📅 你的提醒清单：\n" + "\n".join(my_items))
 
     @command("提醒删除")
-    async def delete(self, event: AstrMessageEvent, index: int):
+    async def delete(self, event: AstrMessageEvent, index: int, **kwargs):
         '''用法: /提醒删除 [编号]'''
-        try:
-            user_id = str(event.get_sender_id())
-        except:
-            user_id = str(event.message_obj.sender.user_id)
-            
+        user_id = str(event.get_sender_id())
         try:
             if 0 <= index < len(self.reminders) and str(self.reminders[index]['user_id']) == user_id:
                 removed = self.reminders.pop(index)
@@ -138,13 +132,9 @@ class PersonalReminder(Star):
             yield CommandResult().error("请输入正确的编号。")
 
     @command("提醒测试")
-    async def test(self, event: AstrMessageEvent):
-        '''用法: /提醒测试 （立即测试我的提醒）'''
-        try:
-            user_id = str(event.get_sender_id())
-        except:
-            user_id = str(event.message_obj.sender.user_id)
-            
+    async def test(self, event: AstrMessageEvent, **kwargs):
+        '''用法: /提醒测试'''
+        user_id = str(event.get_sender_id())
         my_items = [r for r in self.reminders if str(r['user_id']) == user_id]
         
         if not my_items:
