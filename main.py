@@ -6,13 +6,12 @@ import traceback
 from datetime import datetime
 from astrbot.api.all import *
 
-@register("dnf_personal_reminder", "yunko1993", "DNF私人提醒秘书", "1.3.7")
+@register("dnf_personal_reminder", "yunko1993", "DNF私人提醒秘书", "1.3.8")
 class PersonalReminder(Star):
     def __init__(self, context: Context):
         super().__init__(context)
         
         self.plugin_name = "dnf_personal_reminder"
-        # 路径适配
         base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         self.data_dir = os.path.join(base_dir, "data", "plugin_data", self.plugin_name)
         
@@ -29,8 +28,8 @@ class PersonalReminder(Star):
                 with open(self.data_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
             except:
-                return []
-        return []
+                return[]
+        return[]
 
     def _save_data(self):
         try:
@@ -41,7 +40,6 @@ class PersonalReminder(Star):
             logging.error(f"DNF提醒保存失败: {e}")
 
     def _get_scheduler(self):
-        """适配 v4.16.0 的调度器获取"""
         if hasattr(self.context, 'get_scheduler'):
             return self.context.get_scheduler()
         if hasattr(self.context, 'runtime') and hasattr(self.context.runtime, 'scheduler'):
@@ -68,46 +66,73 @@ class PersonalReminder(Star):
                 )
             except: pass
 
+    # ================= 核心黑科技：全网搜捕发送器 =================
+    def _get_active_platforms(self):
+        """利用反射(Reflection)暴力扫描并获取底层适配器，无视 API 改名"""
+        pm = self.context.platform_manager
+        platforms =[]
+        
+        # 扫描 platform_manager 内部所有的列表和字典
+        for attr in dir(pm):
+            if attr.startswith('_'): continue
+            val = getattr(pm, attr)
+            
+            if isinstance(val, dict):
+                platforms.extend(val.values())
+            elif isinstance(val, list):
+                platforms.extend(val)
+                
+        # 筛选出真正具备“发送消息”能力的适配器对象
+        valid_platforms =[]
+        for p in platforms:
+            if hasattr(p, 'send_msg') or hasattr(p, 'send_private_msg') or hasattr(p, 'handle_out_msg'):
+                if p not in valid_platforms:
+                    valid_platforms.append(p)
+                    
+        return valid_platforms
+
     async def _send_private_notification(self, item):
-        """
-        核心修复：针对 v4.16.0 修正属性名错误
-        """
         user_id = str(item['user_id'])
         msg_text = f"🔔 【私人秘书提醒】\n--------------------\n内容：{item['content']}\n时间：{item['time']}\n--------------------\n👉 记得领取哦！"
         
-        logging.info(f"DNF提醒: 开始尝试向 {user_id} 发送主动消息...")
+        logging.info(f"DNF提醒: 开始向用户 {user_id} 发送私聊消息...")
         
-        try:
-            # 1. 根据日志提示，使用属性名 platform_manager
-            pm = self.context.platform_manager
-            platform = pm.get_main_platform()
-            
-            # 2. 导入 v4 标准的消息目标类型
-            from astrbot.api.message_event import OutMsg, TargetType
-            
-            # 3. 构造 OutMsg (v4.16.0 标准主动发送对象)
-            out_msg = OutMsg()
-            out_msg.type = TargetType.PRIVATE
-            out_msg.target_id = user_id
-            out_msg.chain = [Plain(msg_text)]
-            
-            # 4. 执行发送
-            # 在 v4 中，handle_out_msg 是平台处理发出的消息的标准接口
-            if hasattr(platform, 'handle_out_msg'):
-                await platform.handle_out_msg(out_msg)
-            elif hasattr(platform, 'send_msg'):
-                await platform.send_msg(out_msg)
-            elif hasattr(platform, 'send_private_msg'):
-                # 兼容 OneBot11 特有方法
-                await platform.send_private_msg(user_id=int(user_id), message=[Plain(msg_text)])
-            else:
-                logging.error(f"DNF提醒: 平台 {type(platform).__name__} 没有任何可用的发送方法。")
-                
-            logging.info(f"DNF提醒: 用户 {user_id} 的提醒发送指令已执行。")
-            
-        except Exception as e:
-            logging.error(f"DNF提醒: 向用户 {user_id} 发送消息失败!")
-            logging.error(traceback.format_exc())
+        platforms = self._get_active_platforms()
+        if not platforms:
+            logging.error("DNF提醒: 致命错误 - 找不到任何网络通信适配器！")
+            return
+
+        success = False
+        for platform in platforms:
+            # 策略1：通用 OutMsg 协议
+            if hasattr(platform, 'send_msg') or hasattr(platform, 'handle_out_msg'):
+                try:
+                    from astrbot.api.message_event import OutMsg, TargetType
+                    out_msg = OutMsg(type=TargetType.PRIVATE, target_id=user_id, chain=[Plain(msg_text)])
+                    
+                    if hasattr(platform, 'send_msg'):
+                        await platform.send_msg(out_msg)
+                    else:
+                        await platform.handle_out_msg(out_msg)
+                        
+                    logging.info(f"DNF提醒: 已通过 OutMsg 协议成功发送。")
+                    success = True
+                    break
+                except Exception as e:
+                    pass
+
+            # 策略2：OneBot 原生协议底层强发 (专治 NapCat)
+            if not success and hasattr(platform, 'send_private_msg'):
+                try:
+                    await platform.send_private_msg(user_id=int(user_id), message=[Plain(msg_text)])
+                    logging.info(f"DNF提醒: 已通过 OneBot 原生协议成功发送。")
+                    success = True
+                    break
+                except Exception as e:
+                    pass
+                    
+        if not success:
+            logging.error(f"DNF提醒: 所有适配器均发送失败。")
 
     # ================= 指令区 =================
     
@@ -163,12 +188,12 @@ class PersonalReminder(Star):
     @command("提醒测试")
     async def test(self, event: AstrMessageEvent):
         user_id = str(event.get_sender_id())
-        my_items = [r for r in self.reminders if str(r['user_id']) == user_id]
+        my_items =[r for r in self.reminders if str(r['user_id']) == user_id]
         if not my_items:
             yield event.plain_result("你没有设置任务，无法测试。")
             return
             
-        yield event.plain_result(f"🚀 正在发送 {len(my_items)} 条测试消息...")
+        yield event.plain_result(f"🚀 正在发送测试消息...")
         for item in my_items:
             await self._send_private_notification(item)
             await asyncio.sleep(0.5)
