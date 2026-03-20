@@ -6,12 +6,13 @@ import traceback
 from datetime import datetime
 from astrbot.api.all import *
 
-@register("dnf_personal_reminder", "yunko1993", "DNF私人提醒秘书", "1.3.5")
+@register("dnf_personal_reminder", "yunko1993", "DNF私人提醒秘书", "1.3.6")
 class PersonalReminder(Star):
     def __init__(self, context: Context):
         super().__init__(context)
         
         self.plugin_name = "dnf_personal_reminder"
+        # 路径适配
         base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         self.data_dir = os.path.join(base_dir, "data", "plugin_data", self.plugin_name)
         
@@ -40,6 +41,7 @@ class PersonalReminder(Star):
             logging.error(f"DNF提醒保存失败: {e}")
 
     def _get_scheduler(self):
+        """适配 v4.16.0 的调度器获取"""
         if hasattr(self.context, 'get_scheduler'):
             return self.context.get_scheduler()
         if hasattr(self.context, 'runtime') and hasattr(self.context.runtime, 'scheduler'):
@@ -67,32 +69,51 @@ class PersonalReminder(Star):
             except: pass
 
     async def _send_private_notification(self, item):
-        """核心发送函数：增加了详细的错误日志"""
+        """
+        核心修复：针对 v4.16.0 调整的主动消息发送逻辑
+        """
         user_id = str(item['user_id'])
-        msg = f"🔔 【私人秘书提醒】\n--------------------\n内容：{item['content']}\n时间：{item['time']}\n--------------------\n👉 记得领取哦！"
+        msg_text = f"🔔 【私人秘书提醒】\n--------------------\n内容：{item['content']}\n时间：{item['time']}\n--------------------\n👉 记得领取哦！"
         
-        logging.info(f"DNF提醒: 尝试向用户 {user_id} 发送私聊消息...")
+        logging.info(f"DNF提醒: 开始尝试向 {user_id} 发送主动消息...")
         
         try:
-            # 尝试标准发送方式
-            await self.context.send_private_message(user_id, [Plain(msg)])
-            logging.info(f"DNF提醒: 用户 {user_id} 消息发送指令已提交。")
+            # 获取当前主平台 (NapCat / OneBot)
+            platform = self.context.get_platform_manager().get_main_platform()
+            
+            # 构造消息链
+            chain = [Plain(msg_text)]
+            
+            # 在 v4.16.0 中，最稳妥的主动发送方式是调用适配器的底层发送
+            if hasattr(platform, 'send_private_msg'):
+                # OneBot 适配器通常有此方法
+                await platform.send_private_msg(user_id=int(user_id), message=chain)
+            elif hasattr(platform, 'send_msg'):
+                # 通用发送方法
+                from astrbot.api.message_event import OutMsg, TargetType
+                out_msg = OutMsg(
+                    type=TargetType.PRIVATE,
+                    target_id=user_id,
+                    chain=chain
+                )
+                await platform.send_msg(out_msg)
+            else:
+                logging.error(f"DNF提醒: 未能在平台 {type(platform).__name__} 上找到合适的发送方法。")
+                
+            logging.info(f"DNF提醒: 用户 {user_id} 的提醒已成功提交。")
+            
         except Exception as e:
-            # 如果失败，打印出具体的报错信息
-            logging.error(f"DNF提醒: 向用户 {user_id} 发送消息失败！")
-            logging.error(f"错误类型: {type(e).__name__}")
-            logging.error(f"错误详情: {str(e)}")
-            # 打印详细堆栈，方便排查是否是 API 变动
+            logging.error(f"DNF提醒: 向用户 {user_id} 发送消息时崩溃!")
             logging.error(traceback.format_exc())
 
-    # ================= 指令逻辑 =================
+    # ================= 指令区 =================
     
     @command("提醒添加")
     async def add(self, event: AstrMessageEvent):
         raw_msg = event.message_str.strip()
         parts = raw_msg.split()
         if len(parts) < 3:
-            yield event.plain_result("❌ 格式错误！格式: /提醒添加 10:30 领东西")
+            yield event.plain_result("❌ 格式错误！格式: /提醒添加 10:30 内容")
             return
             
         time_str = parts[1]
@@ -144,8 +165,7 @@ class PersonalReminder(Star):
             yield event.plain_result("你没有设置任务，无法测试。")
             return
             
-        yield event.plain_result(f"🚀 正在发送 {len(my_items)} 条测试消息，请查看私聊...")
+        yield event.plain_result(f"🚀 正在发送 {len(my_items)} 条测试消息...")
         for item in my_items:
-            # 这里的调用不再静默失败，会有日志
             await self._send_private_notification(item)
             await asyncio.sleep(0.5)
