@@ -213,12 +213,7 @@ class PersonalReminder(Star):
             parts = base_umo.split(":", 2)
             if len(parts) == 3:
                 prefix = parts[0]
-                return [
-                    f"{prefix}:GroupMessage:{group_target}",
-                    f"{prefix}:group_message:{group_target}",
-                    f"{prefix}:GROUP_MESSAGE:{group_target}",
-                    f"{prefix}:group:{group_target}",
-                ]
+                return [f"{prefix}:GroupMessage:{group_target}"]
 
         return [group_target]
 
@@ -450,37 +445,48 @@ class PersonalReminder(Star):
         return MessageChain().message(msg_text)
 
     def _should_use_cq_at_all(self, target_umo: str) -> bool:
-        if not self._mention_all_enabled():
-            return False
-        return ":GroupMessage:" in str(target_umo)
+        return False
 
     def _create_group_chain(self, msg_text: str, target_umo: str):
         from astrbot.api.event import MessageChain
-
-        if self._should_use_cq_at_all(target_umo):
-            return MessageChain().message("[CQ:at,qq=all]\n" + msg_text)
 
         parts = []
         if self._mention_all_enabled():
             try:
                 import astrbot.api.message_components as Comp
 
-                at_all_cls = getattr(Comp, "AtAll", None)
-                if at_all_cls:
-                    parts.append(at_all_cls())
+                at_cls = getattr(Comp, "At", None)
+                if at_cls:
+                    parts.append(at_cls(qq="all"))
                     parts.append(Comp.Plain(text="\n"))
                 else:
-                    at_cls = getattr(Comp, "At", None)
-                    if at_cls:
-                        parts.append(at_cls(qq="all"))
+                    at_all_cls = getattr(Comp, "AtAll", None)
+                    if at_all_cls:
+                        parts.append(at_all_cls())
                         parts.append(Comp.Plain(text="\n"))
                     else:
                         parts.append(Plain("@\u5168\u4f53\u6210\u5458\n"))
             except Exception as exc:
                 logging.warning("DNF reminder: failed to create @all component: %s", exc)
                 parts.append(Plain("@\u5168\u4f53\u6210\u5458\n"))
+        else:
+            try:
+                import astrbot.api.message_components as Comp
 
-        parts.append(Plain(msg_text))
+                parts.append(Comp.Plain(text=msg_text))
+            except Exception:
+                parts.append(Plain(msg_text))
+                chain = MessageChain()
+                chain.chain = parts
+                return chain
+
+        if self._mention_all_enabled():
+            try:
+                import astrbot.api.message_components as Comp
+
+                parts.append(Comp.Plain(text=msg_text))
+            except Exception:
+                parts.append(Plain(msg_text))
         chain = MessageChain()
         chain.chain = parts
         return chain
