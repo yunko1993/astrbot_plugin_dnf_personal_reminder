@@ -449,8 +449,16 @@ class PersonalReminder(Star):
 
         return MessageChain().message(msg_text)
 
-    def _create_group_chain(self, msg_text: str):
+    def _should_use_cq_at_all(self, target_umo: str) -> bool:
+        if not self._mention_all_enabled():
+            return False
+        return ":GroupMessage:" in str(target_umo)
+
+    def _create_group_chain(self, msg_text: str, target_umo: str):
         from astrbot.api.event import MessageChain
+
+        if self._should_use_cq_at_all(target_umo):
+            return MessageChain().message("[CQ:at,qq=all]\n" + msg_text)
 
         parts = []
         if self._mention_all_enabled():
@@ -513,7 +521,7 @@ class PersonalReminder(Star):
         for target in targets:
             umo = target["umo"]
             chain_payload = (
-                self._create_group_chain(msg_text)
+                self._create_group_chain(msg_text, umo)
                 if target["kind"] == "group"
                 else self._build_plain_message_chain(msg_text)
             )
