@@ -491,13 +491,6 @@ class PersonalReminder(Star):
         chain.chain = parts
         return chain
 
-    def _create_group_plain_chain(self, msg_text: str):
-        from astrbot.api.event import MessageChain
-
-        chain = MessageChain()
-        chain.chain = [Plain(msg_text)]
-        return chain
-
     def _get_notification_targets(self, item: Dict[str, str]) -> List[Dict[str, str]]:
         targets: List[Dict[str, str]] = []
         seen = set()
@@ -554,12 +547,7 @@ class PersonalReminder(Star):
                 logging.warning("DNF reminder: primary send failed to %s: %s", umo, exc)
 
             try:
-                fallback_chain = (
-                    self._create_group_plain_chain(msg_text)
-                    if target["kind"] == "group"
-                    else self._build_plain_message_chain(msg_text)
-                )
-                await self.context.send_message(umo, fallback_chain)
+                await self.context.send_message(umo, self._build_plain_message_chain(msg_text))
                 delivered += 1
                 logging.info("DNF reminder: plain fallback send succeeded to %s", umo)
             except Exception as exc:
