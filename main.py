@@ -444,7 +444,14 @@ class PersonalReminder(Star):
         )
         return msg_text
 
+    def _build_plain_message_chain(self, msg_text: str):
+        from astrbot.api.event import MessageChain
+
+        return MessageChain().message(msg_text)
+
     def _create_group_chain(self, msg_text: str):
+        from astrbot.api.event import MessageChain
+
         parts = []
         if self._mention_all_enabled():
             try:
@@ -466,7 +473,9 @@ class PersonalReminder(Star):
                 parts.append(Plain("@\u5168\u4f53\u6210\u5458\n"))
 
         parts.append(Plain(msg_text))
-        return parts
+        chain = MessageChain()
+        chain.chain = parts
+        return chain
 
     def _get_notification_targets(self, item: Dict[str, str]) -> List[Dict[str, str]]:
         targets: List[Dict[str, str]] = []
@@ -503,7 +512,11 @@ class PersonalReminder(Star):
         delivered = 0
         for target in targets:
             umo = target["umo"]
-            chain_payload = self._create_group_chain(msg_text) if target["kind"] == "group" else None
+            chain_payload = (
+                self._create_group_chain(msg_text)
+                if target["kind"] == "group"
+                else self._build_plain_message_chain(msg_text)
+            )
             logging.info(
                 "DNF reminder: sending message to umo=%s kind=%s raw_target=%s",
                 umo,
@@ -512,13 +525,7 @@ class PersonalReminder(Star):
             )
 
             try:
-                if chain_payload is None:
-                    from astrbot.api.event import MessageChain
-
-                    chain = MessageChain().message(msg_text)
-                    await self.context.send_message(umo, chain)
-                else:
-                    await self.context.send_message(umo, chain_payload)
+                await self.context.send_message(umo, chain_payload)
                 delivered += 1
                 logging.info("DNF reminder: send succeeded to %s", umo)
                 continue
@@ -526,7 +533,7 @@ class PersonalReminder(Star):
                 logging.warning("DNF reminder: primary send failed to %s: %s", umo, exc)
 
             try:
-                await self.context.send_message(umo, [Plain(msg_text)])
+                await self.context.send_message(umo, self._build_plain_message_chain(msg_text))
                 delivered += 1
                 logging.info("DNF reminder: plain fallback send succeeded to %s", umo)
             except Exception as exc:
