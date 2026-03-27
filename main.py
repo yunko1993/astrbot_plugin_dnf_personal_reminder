@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
@@ -192,6 +193,34 @@ class PersonalReminder(Star):
                 targets.append(text)
                 seen.add(text)
         return targets
+
+    def _looks_like_session_string(self, value: str) -> bool:
+        return value.count(":") >= 2
+
+    def _build_group_session_candidates(self, group_target: str, item: Dict[str, str]) -> List[str]:
+        group_target = str(group_target).strip()
+        if not group_target:
+            return []
+
+        if self._looks_like_session_string(group_target):
+            return [group_target]
+
+        if not re.fullmatch(r"\d+", group_target):
+            return [group_target]
+
+        base_umo = str(item.get("umo", "")).strip()
+        if self._looks_like_session_string(base_umo):
+            parts = base_umo.split(":", 2)
+            if len(parts) == 3:
+                prefix = parts[0]
+                return [
+                    f"{prefix}:GroupMessage:{group_target}",
+                    f"{prefix}:group_message:{group_target}",
+                    f"{prefix}:GROUP_MESSAGE:{group_target}",
+                    f"{prefix}:group:{group_target}",
+                ]
+
+        return [group_target]
 
     def _send_to_groups_enabled(self) -> bool:
         return bool(self._get_config_value("send_to_configured_groups", False))
@@ -450,10 +479,17 @@ class PersonalReminder(Star):
 
         if self._send_to_groups_enabled():
             for target in self._get_group_targets():
-                if target in seen:
-                    continue
-                seen.add(target)
-                targets.append({"umo": target, "kind": "group"})
+                for session_candidate in self._build_group_session_candidates(target, item):
+                    if session_candidate in seen:
+                        continue
+                    seen.add(session_candidate)
+                    targets.append(
+                        {
+                            "umo": session_candidate,
+                            "kind": "group",
+                            "raw_target": target,
+                        }
+                    )
 
         return targets
 
@@ -468,7 +504,12 @@ class PersonalReminder(Star):
         for target in targets:
             umo = target["umo"]
             chain_payload = self._create_group_chain(msg_text) if target["kind"] == "group" else None
-            logging.info("DNF reminder: sending message to umo=%s kind=%s", umo, target["kind"])
+            logging.info(
+                "DNF reminder: sending message to umo=%s kind=%s raw_target=%s",
+                umo,
+                target["kind"],
+                target.get("raw_target", umo),
+            )
 
             try:
                 if chain_payload is None:
